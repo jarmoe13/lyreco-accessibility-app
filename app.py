@@ -49,4 +49,5 @@ def run_audit(url):
             issues = ", ".join([a['title'] for a in audits.values() if a.get('score', 1) < 1][:3])
         
         # WAVE
-        r_w = requests.get(f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}", timeout=30
+
+        r_w = requests.get(f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}", timeout=30)
