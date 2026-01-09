@@ -38,16 +38,10 @@ def calculate_lyreco_score(lh_pct, w_err, w_con):
 def run_audit(url):
     lh_val, err, con, issues = 0, 0, 0, "N/A"
     try:
-        # Lighthouse
-        url_enc = urllib.parse.quote(url)
+# --- Lighthouse ---
         lh_api = f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url_enc}&category=accessibility&onlyCategories=accessibility&strategy=desktop&key={GOOGLE_KEY}"
-        r_lh = requests.get(lh_api, timeout=40)
-        if r_lh.status_code == 200:
-            d = r_lh.json()
-            lh_val = d['lighthouseResult']['categories']['accessibility']['score'] * 100
-            audits = d['lighthouseResult']['audits']
-            issues = ", ".join([a['title'] for a in audits.values() if a.get('score', 1) < 1][:3])
+        r_lh = requests.get(lh_api, timeout=40) # Sprawdź ten nawias!
         
-        # WAVE
-
-        r_w = requests.get(f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}", timeout=30)
+        # --- WAVE ---
+        wave_api = f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}"
+        r_w = requests.get(wave_api, timeout=30) # TUTAJ BYŁ BŁĄD - dodaj nawias na końcu
