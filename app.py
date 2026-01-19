@@ -433,13 +433,8 @@ def display_dashboard(df):
 # --- MAIN UI ---
 # Sidebar with branding
 with st.sidebar:
-    # Load SVG logo
-    try:
-        with open("lyreco_logo.svg", "r") as f:
-            svg_logo = f.read()
-        st.markdown(f'<div style="text-align: center; padding: 20px 0;">{svg_logo}</div>', unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.markdown("### Lyreco")
+    # Load logo from Lyreco CDN
+    st.image("https://cdn-s1.lyreco.com/staticswebshop/pictures/looknfeel/FRFR/logo.svg", width=200)
     
     st.divider()
     st.markdown("### 📊 About This Tool")
@@ -447,9 +442,9 @@ with st.sidebar:
     Automated WCAG compliance monitoring for Lyreco e-commerce platforms.
     
     **Powered by:**
-    - 🔍 Google Lighthouse
-    - 🌊 WAVE by WebAIM  
-    - 🤖 Claude AI
+    - Google Lighthouse
+    - WAVE by WebAIM  
+    - Axe.dev
     
     **Coverage:**
     - 6 countries
@@ -459,6 +454,10 @@ with st.sidebar:
     
     st.divider()
     st.caption("Version 7.0 | January 2026")
+
+# Main title
+st.title("Lyreco Accessibility Monitor")
+st.caption("Multi-country WCAG compliance tracking")
 
 # Main title
 st.title("Lyreco Accessibility Monitor")
@@ -564,6 +563,7 @@ with tab2:
 # Footer
 st.divider()
 st.caption("Version 7.0 - AI-Powered Analysis | Lighthouse + WAVE + Claude")
+
 
 
 
