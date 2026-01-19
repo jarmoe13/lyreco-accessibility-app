@@ -79,28 +79,31 @@ def get_color_emoji(score):
         return "🔴"
 
 def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt_issues):
+    # FIX: Convert None to 0
+    score = score or 0
+    lh_val = lh_val or 0
+    wave_err = wave_err or 0
+    contrast = contrast or 0
     aria_issues = aria_issues or 0
     alt_issues = alt_issues or 0
-    contrast = contrast or 0
-    wave_err = wave_err or 0
     
     recommendations = []
     
     if aria_issues > 0:
-        recommendations.append(f"🔴 CRITICAL: Fix {aria_issues} ARIA issues (screen readers)")
+        recommendations.append(f"🔴 CRITICAL: Fix {int(aria_issues)} ARIA issues (screen readers)")
     
     if alt_issues > 0:
-        recommendations.append(f"🔴 CRITICAL: Add alt text to {alt_issues} images")
+        recommendations.append(f"🔴 CRITICAL: Add alt text to {int(alt_issues)} images")
     
     if contrast > 10:
-        recommendations.append(f"🟡 HIGH: Fix {contrast} contrast issues (WCAG AA)")
+        recommendations.append(f"🟡 HIGH: Fix {int(contrast)} contrast issues (WCAG AA)")
     elif contrast > 0:
-        recommendations.append(f"🟡 MEDIUM: Improve {contrast} contrast ratios")
+        recommendations.append(f"🟡 MEDIUM: Improve {int(contrast)} contrast ratios")
     
     if wave_err > 20:
-        recommendations.append(f"🔴 HIGH: {wave_err} accessibility errors detected")
+        recommendations.append(f"🔴 HIGH: {int(wave_err)} accessibility errors detected")
     elif wave_err > 5:
-        recommendations.append(f"🟡 MEDIUM: {wave_err} errors need attention")
+        recommendations.append(f"🟡 MEDIUM: {int(wave_err)} errors need attention")
     
     if score < 60:
         recommendations.append("⚠️ ACTION REQUIRED: Critical barriers present")
@@ -109,7 +112,7 @@ def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt
     elif score >= 90:
         recommendations.append("✅ MAINTAIN: Monitor for regressions")
     
-    return recommendations
+    return recommendations if recommendations else ["✅ No major issues detected"]
 
 # --- AUDIT FUNCTION ---
 def run_audit(url, page_type, country, deploy_version=""):
@@ -373,3 +376,4 @@ with tab2:
 # Footer
 st.divider()
 st.caption("Version 6.0 - Updated Scoring Formula (50/50) | Powered by Lighthouse & WAVE")
+
