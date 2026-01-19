@@ -278,7 +278,7 @@ def analyze_with_ai(df):
         }
         
         data = {
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-3-haiku-20240307",  # Fast & cheap
             "max_tokens": 2000,
             "messages": [
                 {"role": "user", "content": prompt}
@@ -534,4 +534,5 @@ with tab2:
 # Footer
 st.divider()
 st.caption("Version 7.0 - AI-Powered Analysis | Lighthouse + WAVE + Claude")
+
 
