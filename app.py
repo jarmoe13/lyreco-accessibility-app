@@ -162,37 +162,47 @@ def run_audit(url, page_type, country, deploy_version=""):
                     if 'image-alt' in audit_id or 'alt' in title.lower():
                         alt_issues += 1
         
-        # WAVE
+    # === WAVE ===
+    st.write(f"🔍 DEBUG: Testing WAVE for {country}-{page_type}")
+    try:
         wave_api = f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}"
+        st.write(f"WAVE URL: {wave_api[:100]}...")  # Show first 100 chars
+        
         r_w = requests.get(wave_api, timeout=35)
+        st.write(f"WAVE Status Code: {r_w.status_code}")
         
         if r_w.status_code == 200:
-            dw = r_w.json()
-            err = dw['categories']['error']['count']
-            con = dw['categories']['contrast']['count']
+            try:
+                dw = r_w.json()
+                st.write(f"WAVE Response Keys: {list(dw.keys())}")
+                
+                # Safe extraction
+                try:
+                    err_val = dw.get('categories', {}).get('error', {}).get('count')
+                    st.write(f"WAVE Errors extracted: {err_val}")
+                    if err_val is not None:
+                        err = int(err_val)
+                except Exception as e:
+                    st.write(f"Error extracting WAVE errors: {e}")
+                
+                try:
+                    con_val = dw.get('categories', {}).get('contrast', {}).get('count')
+                    st.write(f"WAVE Contrast extracted: {con_val}")
+                    if con_val is not None:
+                        con = int(con_val)
+                except Exception as e:
+                    st.write(f"Error extracting contrast: {e}")
+                    
+            except Exception as e:
+                st.error(f"WAVE JSON error: {e}")
+                st.write(f"WAVE Raw response (first 500 chars): {r_w.text[:500]}")
+        else:
+            st.error(f"WAVE API returned status {r_w.status_code}")
+            st.write(f"Response: {r_w.text[:500]}")
             
     except Exception as e:
-        st.warning(f"⚠️ Error auditing {country} - {page_type}: {str(e)[:100]}")
-    
-    # Safe scoring
-    score = calculate_lyreco_score(lh_val, err, con)
-    recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues)
-    
-    return {
-        "Country": country,
-        "Page Type": page_type,
-        "URL": url,
-        "Score": safe_float(score),
-        "Lighthouse": safe_float(lh_val),
-        "WAVE Errors": safe_int(err),
-        "Contrast Issues": safe_int(con),
-        "ARIA Issues": safe_int(aria_issues),
-        "Alt Text Issues": safe_int(alt_issues),
-        "Top Failed Audits": "; ".join(failed_audits[:3]) if failed_audits else "",
-        "Recommendations": " | ".join(recommendations),
-        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Deploy_Version": deploy_version or ""
-    }
+        st.error(f"WAVE request exception: {e}")
+
 
 # --- DASHBOARD FUNCTIONS ---
 def display_dashboard(df):
@@ -401,3 +411,4 @@ with tab2:
 # Footer
 st.divider()
 st.caption("Version 6.1 - Stabilized Error Handling | Powered by Lighthouse & WAVE")
+
