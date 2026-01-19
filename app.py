@@ -5,7 +5,6 @@ import math
 import urllib.parse
 import plotly.express as px
 from datetime import datetime
-from io import BytesIO
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
@@ -53,8 +52,27 @@ COUNTRIES = {
 
 SSO_LOGIN = "https://welcome.lyreco.com/lyreco-customers/login?scope=openid+lyreco.contacts.personalInfo%3Awrite%3Aself&client_id=2ddf9463-3e1e-462a-9f94-633e1e062ae8&response_type=code&state=4102a88f-fec5-46d1-b8d9-ea543ba0a385&redirect_uri=https%3A%2F%2Fshop.lyreco.fr%2Foidc-login-callback%2FaHR0cHMlM0ElMkYlMkZzaG9wLmx5cmVjby5mciUyRmZy&ui_locales=fr-FR&logo_uri=https%3A%2F%2Fshop.lyreco.fr"
 
+# --- HELPER FUNCTION ---
+def safe_int(value):
+    """Convert to int, handle None"""
+    try:
+        return int(value) if value is not None else 0
+    except:
+        return 0
+
+def safe_float(value):
+    """Convert to float, handle None"""
+    try:
+        return float(value) if value is not None else 0.0
+    except:
+        return 0.0
+
 # --- SCORING FUNCTIONS ---
 def calculate_lyreco_score(lh_pct, w_err, w_con):
+    lh_pct = safe_float(lh_pct)
+    w_err = safe_int(w_err)
+    w_con = safe_int(w_con)
+    
     err_penalty = w_err * 1.2
     con_penalty = w_con * 0.5
     wave_base = max(0, 100 - err_penalty - con_penalty)
@@ -67,6 +85,7 @@ def calculate_lyreco_score(lh_pct, w_err, w_con):
     return round(max(0, final_score), 1)
 
 def get_color_emoji(score):
+    score = safe_float(score)
     if score >= 95:
         return "🟢🟢"
     elif score >= 90:
@@ -79,31 +98,31 @@ def get_color_emoji(score):
         return "🔴"
 
 def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt_issues):
-    # FIX: Convert None to 0
-    score = score or 0
-    lh_val = lh_val or 0
-    wave_err = wave_err or 0
-    contrast = contrast or 0
-    aria_issues = aria_issues or 0
-    alt_issues = alt_issues or 0
+    # Safe conversion
+    score = safe_float(score)
+    lh_val = safe_float(lh_val)
+    wave_err = safe_int(wave_err)
+    contrast = safe_int(contrast)
+    aria_issues = safe_int(aria_issues)
+    alt_issues = safe_int(alt_issues)
     
     recommendations = []
     
     if aria_issues > 0:
-        recommendations.append(f"🔴 CRITICAL: Fix {int(aria_issues)} ARIA issues (screen readers)")
+        recommendations.append(f"🔴 CRITICAL: Fix {aria_issues} ARIA issues (screen readers)")
     
     if alt_issues > 0:
-        recommendations.append(f"🔴 CRITICAL: Add alt text to {int(alt_issues)} images")
+        recommendations.append(f"🔴 CRITICAL: Add alt text to {alt_issues} images")
     
     if contrast > 10:
-        recommendations.append(f"🟡 HIGH: Fix {int(contrast)} contrast issues (WCAG AA)")
+        recommendations.append(f"🟡 HIGH: Fix {contrast} contrast issues (WCAG AA)")
     elif contrast > 0:
-        recommendations.append(f"🟡 MEDIUM: Improve {int(contrast)} contrast ratios")
+        recommendations.append(f"🟡 MEDIUM: Improve {contrast} contrast ratios")
     
     if wave_err > 20:
-        recommendations.append(f"🔴 HIGH: {int(wave_err)} accessibility errors detected")
+        recommendations.append(f"🔴 HIGH: {wave_err} accessibility errors detected")
     elif wave_err > 5:
-        recommendations.append(f"🟡 MEDIUM: {int(wave_err)} errors need attention")
+        recommendations.append(f"🟡 MEDIUM: {wave_err} errors need attention")
     
     if score < 60:
         recommendations.append("⚠️ ACTION REQUIRED: Critical barriers present")
@@ -153,8 +172,9 @@ def run_audit(url, page_type, country, deploy_version=""):
             con = dw['categories']['contrast']['count']
             
     except Exception as e:
-        st.error(f"Error auditing {url}: {e}")
+        st.warning(f"⚠️ Error auditing {country} - {page_type}: {str(e)[:100]}")
     
+    # Safe scoring
     score = calculate_lyreco_score(lh_val, err, con)
     recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues)
     
@@ -162,16 +182,16 @@ def run_audit(url, page_type, country, deploy_version=""):
         "Country": country,
         "Page Type": page_type,
         "URL": url,
-        "Score": score,
-        "Lighthouse": lh_val,
-        "WAVE Errors": err,
-        "Contrast Issues": con,
-        "ARIA Issues": aria_issues,
-        "Alt Text Issues": alt_issues,
-        "Top Failed Audits": "; ".join(failed_audits[:3]),
+        "Score": safe_float(score),
+        "Lighthouse": safe_float(lh_val),
+        "WAVE Errors": safe_int(err),
+        "Contrast Issues": safe_int(con),
+        "ARIA Issues": safe_int(aria_issues),
+        "Alt Text Issues": safe_int(alt_issues),
+        "Top Failed Audits": "; ".join(failed_audits[:3]) if failed_audits else "",
         "Recommendations": " | ".join(recommendations),
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Deploy_Version": deploy_version
+        "Deploy_Version": deploy_version or ""
     }
 
 # --- DASHBOARD FUNCTIONS ---
@@ -195,6 +215,7 @@ def display_dashboard(df):
     def color_score(val):
         if pd.isna(val):
             return ''
+        val = safe_float(val)
         if val >= 95:
             return 'background-color: #00cc66; color: white'
         elif val >= 90:
@@ -217,8 +238,8 @@ def display_dashboard(df):
     
     country_filter = st.multiselect(
         "Filter by Country",
-        options=df['Country'].unique(),
-        default=df['Country'].unique()
+        options=df['Country'].unique().tolist(),
+        default=df['Country'].unique().tolist()
     )
     
     filtered_df = df[df['Country'].isin(country_filter)]
@@ -236,14 +257,15 @@ def display_dashboard(df):
     
     if len(critical) > 0:
         for idx, row in critical.iterrows():
-            with st.expander(f"⚠️ {row['Country']} - {row['Page Type']} (Score: {row['Score']})"):
+            with st.expander(f"⚠️ {row['Country']} - {row['Page Type']} (Score: {row['Score']:.1f})"):
                 st.markdown(f"**URL:** {row['URL']}")
-                st.markdown(f"**Lighthouse:** {row['Lighthouse']} | **WAVE Errors:** {row['WAVE Errors']} | **Contrast:** {row['Contrast Issues']}")
+                st.markdown(f"**Lighthouse:** {row['Lighthouse']:.1f} | **WAVE Errors:** {safe_int(row['WAVE Errors'])} | **Contrast:** {safe_int(row['Contrast Issues'])}")
                 
                 st.markdown("**Recommendations:**")
-                recs = row['Recommendations'].split(' | ')
+                recs = str(row['Recommendations']).split(' | ')
                 for i, rec in enumerate(recs, 1):
-                    st.markdown(f"{i}. {rec}")
+                    if rec and rec != 'nan':
+                        st.markdown(f"{i}. {rec}")
                 
                 if pd.notna(row.get('Top Failed Audits')) and row['Top Failed Audits']:
                     st.markdown("**Failed Audits:**")
@@ -256,16 +278,18 @@ def display_dashboard(df):
     # Chart
     st.subheader("📊 Score Distribution by Country")
     
-    fig = px.bar(
-        df[df['Country'] != 'Global'],
-        x='Country',
-        y='Score',
-        color='Page Type',
-        barmode='group',
-        title='Accessibility Scores by Country and Page Type'
-    )
-    fig.update_layout(yaxis_range=[0, 100])
-    st.plotly_chart(fig, use_container_width=True)
+    chart_df = df[df['Country'] != 'Global'].copy()
+    if len(chart_df) > 0:
+        fig = px.bar(
+            chart_df,
+            x='Country',
+            y='Score',
+            color='Page Type',
+            barmode='group',
+            title='Accessibility Scores by Country and Page Type'
+        )
+        fig.update_layout(yaxis_range=[0, 100])
+        st.plotly_chart(fig, use_container_width=True)
     
     # Download
     st.divider()
@@ -304,6 +328,7 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
+    ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
     """)
 
 st.divider()
@@ -329,7 +354,7 @@ with tab1:
             results = []
             
             # Progress
-            total_audits = 1 + (len(country_selection) * 3)  # SSO + countries x pages
+            total_audits = 1 + (len(country_selection) * 3)
             progress_bar = st.progress(0)
             status_text = st.empty()
             current = 0
@@ -375,5 +400,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Version 6.0 - Updated Scoring Formula (50/50) | Powered by Lighthouse & WAVE")
-
+st.caption("Version 6.1 - Stabilized Error Handling | Powered by Lighthouse & WAVE")
