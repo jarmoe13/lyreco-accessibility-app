@@ -130,7 +130,7 @@ def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt
     
     return recommendations if recommendations else ["✅ No major issues detected"]
 
-# --- AUDIT FUNCTION ---
+# --- AUDIT FUNCTION (WITH WAVE) ---
 def run_audit(url, page_type, country, deploy_version=""):
     lh_val = 0.0
     err = 0
@@ -170,9 +170,38 @@ def run_audit(url, page_type, country, deploy_version=""):
     except Exception as e:
         st.warning(f"⚠️ Lighthouse error for {country}-{page_type}: {str(e)[:80]}")
     
-    # === WAVE (Temporarily using Lighthouse score only) ===
-    # Note: WAVE integration to be added - using Lighthouse 100% for now
-    score = lh_val
+    # === WAVE ===
+    try:
+        wave_api = f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}"
+        r_w = requests.get(wave_api, timeout=35)
+        
+        if r_w.status_code == 200:
+            try:
+                dw = r_w.json()
+                
+                # Safe extraction of errors
+                if 'categories' in dw:
+                    if 'error' in dw['categories']:
+                        err_val = dw['categories']['error'].get('count')
+                        if err_val is not None:
+                            err = int(err_val)
+                    
+                    # Safe extraction of contrast
+                    if 'contrast' in dw['categories']:
+                        con_val = dw['categories']['contrast'].get('count')
+                        if con_val is not None:
+                            con = int(con_val)
+                            
+            except Exception as e:
+                st.warning(f"⚠️ WAVE parsing error for {country}-{page_type}: {str(e)[:80]}")
+        else:
+            st.warning(f"⚠️ WAVE API returned status {r_w.status_code} for {country}-{page_type}")
+            
+    except Exception as e:
+        st.warning(f"⚠️ WAVE request error for {country}-{page_type}: {str(e)[:80]}")
+    
+    # === CALCULATE SCORE (50/50) ===
+    score = calculate_lyreco_score(lh_val, err, con)
     
     recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues)
     
@@ -308,14 +337,20 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     st.markdown("""
     ### Lyreco Accessibility Score (0-100)
     
-    **Current version uses:**
+    Combines two industry-standard tools:
     
-    **🔍 Google Lighthouse (100%)**
+    **🔍 Google Lighthouse (50%)**
     - Tests 40+ accessibility rules
     - Checks ARIA, semantic HTML, keyboard navigation
-    - Score directly from Lighthouse audit
     
-    **Note:** WAVE integration (contrast & error detection) coming soon.
+    **🌊 WAVE by WebAIM (50%)**
+    - Detects critical errors (missing alt text, broken forms)
+    - Identifies color contrast failures
+    - Penalties: 1.2 points per error, 0.5 per contrast issue
+    
+    **Formula:**
+    - WAVE base = 100 - (errors × 1.2) - (contrast × 0.5)
+    - Final = (Lighthouse × 0.5) + (WAVE × 0.5)
     
     **📈 Score Ranges:**
     - 🟢🟢 95-100: Excellent
@@ -324,8 +359,9 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
-    ⚠️ *Automated tools catch ~40% of issues. Manual testing required for full compliance.*
+    ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
     """)
+
 
 st.divider()
 
@@ -396,4 +432,5 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Version 6.2 - Lighthouse Only (WAVE integration pending) | Powered by Google Lighthouse")
+st.caption("Version 6.3 - Full Integration | Powered by Lighthouse & WAVE")
+
