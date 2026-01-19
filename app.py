@@ -431,7 +431,7 @@ def display_dashboard(df):
     )
 
 # --- MAIN UI ---
-st.title("🌍 Lyreco Accessibility Monitor")
+st.title("Lyreco Accessibility Monitor")
 st.caption("Multi-country WCAG compliance tracking")
 
 # Explanation
@@ -461,7 +461,7 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
-    ⚠️ *Automated tools catch ~40% of issues. Manual testing required for full compliance.*
+    ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
     """)
 
 st.divider()
@@ -534,5 +534,6 @@ with tab2:
 # Footer
 st.divider()
 st.caption("Version 7.0 - AI-Powered Analysis | Lighthouse + WAVE + Claude")
+
 
 
