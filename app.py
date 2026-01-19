@@ -18,29 +18,50 @@ st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
 
 # --- CUSTOM CSS ---
 st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .report-card { padding: 20px; border-radius: 10px; color: white; margin-bottom: 20px; text-align: center; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+    .score-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- CORE LOGIC ---
 def calculate_lyreco_score(lh_pct, w_err, w_con):
-    con_penalty = math.log1p(w_con) * 2.5
-    err_penalty = math.sqrt(w_err) * 4.5
+    """
+    Improved scoring formula:
+    - Lighthouse: 50% weight
+    - WAVE: 50% weight
+    - Linear penalties for errors (more strict)
+    """
+    # Linear penalties (stricter than logarithmic)
+    err_penalty = w_err * 1.2  # Critical errors have high impact
+    con_penalty = w_con * 0.5  # Contrast issues have moderate impact
+    
+    # Calculate WAVE base score with cap
     wave_base = 100 - err_penalty - con_penalty
+    wave_base = max(0, wave_base)  # Cannot go below 0
+    
+    # Final score: 50% Lighthouse + 50% WAVE
     if lh_pct > 0:
-        return round((lh_pct * 0.4) + (wave_base * 0.6), 1)
-    return round(wave_base, 1)
+        final_score = (lh_pct * 0.5) + (wave_base * 0.5)
+    else:
+        final_score = wave_base
+    
+    return round(max(0, final_score), 1)  # Ensure non-negative
 
 def run_audit(url):
     lh_val, err, con, issues = 0, 0, 0, "N/A"
+    
     try:
         # 1. Lighthouse Analysis
         url_enc = urllib.parse.quote(url)
         lh_api = f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url_enc}&category=accessibility&onlyCategories=accessibility&strategy=desktop&key={GOOGLE_KEY}"
         r_lh = requests.get(lh_api, timeout=45)
+        
         if r_lh.status_code == 200:
             d = r_lh.json()
             lh_val = d['lighthouseResult']['categories']['accessibility']['score'] * 100
@@ -50,6 +71,7 @@ def run_audit(url):
         # 2. WAVE Analysis
         wave_api = f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}"
         r_w = requests.get(wave_api, timeout=35)
+        
         if r_w.status_code == 200:
             dw = r_w.json()
             err = dw['categories']['error']['count']
@@ -67,10 +89,43 @@ with st.sidebar:
     st.info("Global Accessibility Monitoring")
     mode = st.radio("Select Mode", ["Platform Comparison (Demo)", "Single Country Audit"])
     st.divider()
-    st.caption("Final Version 5.5")
+    st.caption("Version 6.0 - Updated Scoring")
 
 # --- MAIN INTERFACE ---
 st.title("🌍 Lyreco Accessibility Dashboard")
+
+# --- SCORE EXPLANATION ---
+with st.expander("📊 How We Calculate the Lyreco Accessibility Score"):
+    st.markdown("""
+    ### Understanding Your Accessibility Score (0-100)
+    
+    The **Lyreco Automated Accessibility Score** combines two industry-standard tools to give you a comprehensive view of web accessibility compliance:
+    
+    #### 🔍 What We Measure:
+    
+    **1. Google Lighthouse (50% of final score)**
+    - Automated WCAG 2.1 compliance checks
+    - Tests: color contrast, ARIA labels, keyboard navigation, semantic HTML, and more
+    - Provides a baseline accessibility score from 0-100
+    
+    **2. WAVE by WebAIM (50% of final score)**
+    - Identifies critical accessibility errors (missing alt text, empty links, etc.)
+    - Detects color contrast failures
+    - Penalties applied based on error count:
+      - **Critical errors**: 1.2 points deducted per error
+      - **Contrast issues**: 0.5 points deducted per issue
+    
+    #### 📈 How to Use This Over Time:
+    
+    - **Score 90-100**: Excellent - minimal issues detected
+    - **Score 75-89**: Good - some improvements needed
+    - **Score 60-74**: Fair - multiple accessibility barriers present
+    - **Score <60**: Needs attention - significant accessibility issues
+    
+    **Track your progress**: Run audits regularly to see if code changes improve or reduce accessibility. Compare platforms (e.g., Old Webshop vs NextGen) to understand which performs better.
+    
+    ⚠️ *Note: Automated tools catch ~30-40% of accessibility issues. Manual testing with real users is essential for full WCAG compliance.*
+    """)
 
 if mode == "Platform Comparison (Demo)":
     st.subheader("Head-to-Head: France (Old Webshop vs NextGen)")
@@ -95,33 +150,44 @@ if mode == "Platform Comparison (Demo)":
         
         col_c1, col_c2, col_c3 = st.columns(3)
         with col_c1:
-            st.markdown(f'<div class="report-card" style="background:#e74c3c"><h4>Old Webshop</h4><h1>{old_s}</h1></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="score-card"><h2>{old_s}</h2><p>Old Webshop</p></div>', unsafe_allow_html=True)
         with col_c2:
-            st.markdown(f'<div class="report-card" style="background:#27ae60"><h4>NextGen Platform</h4><h1>{new_s}</h1></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="score-card"><h2>{new_s}</h2><p>NextGen Platform</p></div>', unsafe_allow_html=True)
         with col_c3:
-            st.markdown(f'<div class="report-card" style="background:#2980b9"><h4>Improvement</h4><h1>+{improvement}%</h1></div>', unsafe_allow_html=True)
+            emoji = "📈" if improvement > 0 else "📉"
+            st.markdown(f'<div class="score-card"><h2>{improvement}%</h2><p>{emoji} Change</p></div>', unsafe_allow_html=True)
         
-        # Comparison Chart
-        st.divider()
-        chart_df = pd.DataFrame({
-            'Metric': ['Overall Score', 'Lighthouse %', 'WAVE Errors'],
-            'Old Webshop': [old_s, results["Old Webshop"]["lh"], results["Old Webshop"]["err"]],
-            'NextGen': [new_s, results["NextGen"]["lh"], results["NextGen"]["err"]]
-        }).set_index('Metric')
-        
-        st.bar_chart(chart_df)
-        
-        # Technical Insights
-        with st.expander("See Detailed Technical Issues"):
-            st.write("**Old Webshop Issues:**", results["Old Webshop"]["issues"])
-            st.write("**NextGen Issues:**", results["NextGen"]["issues"])
+        # Detailed Table
+        st.subheader("Detailed Breakdown")
+        df = pd.DataFrame([
+            {"Platform": "Old Webshop", "Score": old_s, "Lighthouse": results["Old Webshop"]["lh"], 
+             "WAVE Errors": results["Old Webshop"]["err"], "Contrast Issues": results["Old Webshop"]["con"]},
+            {"Platform": "NextGen", "Score": new_s, "Lighthouse": results["NextGen"]["lh"], 
+             "WAVE Errors": results["NextGen"]["err"], "Contrast Issues": results["NextGen"]["con"]}
+        ])
+        st.dataframe(df, use_container_width=True)
 
 else:
-    st.subheader("Custom Country Audit")
-    target_url = st.text_input("Enter Lyreco URL", "https://shop.lyreco.it/it")
-    if st.button("Run Audit"):
-        with st.spinner("Analyzing..."):
-            res = run_audit(target_url)
-            st.metric("Final Lyreco Score", res['score'])
-            st.write("### Technical Details")
-            st.json(res)
+    st.subheader("Single Country Deep-Dive Audit")
+    country_url = st.text_input("Enter Country Webshop URL", placeholder="https://shop.lyreco.fr/fr")
+    
+    if st.button("🔍 Run Single Audit"):
+        if country_url:
+            with st.status("Running accessibility audit...", expanded=True) as status:
+                result = run_audit(country_url)
+                status.update(label="Audit Complete!", state="complete")
+            
+            # Display Score
+            st.metric("Lyreco Accessibility Score", result["score"], delta=None)
+            
+            # Details
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Lighthouse Score", f"{result['lh']}%")
+                st.metric("WAVE Errors", result['err'])
+            with col2:
+                st.metric("Contrast Issues", result['con'])
+            
+            st.info(f"**Top Issues Found**: {result['issues']}")
+        else:
+            st.warning("Please enter a URL to audit.")
