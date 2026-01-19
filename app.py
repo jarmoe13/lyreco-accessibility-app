@@ -5,6 +5,7 @@ import math
 import urllib.parse
 import plotly.express as px
 from datetime import datetime
+import json
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
@@ -12,6 +13,7 @@ st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
 try:
     GOOGLE_KEY = st.secrets["GOOGLE_KEY"]
     WAVE_KEY = st.secrets["WAVE_KEY"]
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")  # Optional for AI
 except:
     st.error("⚠️ API Keys missing! Add GOOGLE_KEY and WAVE_KEY to Streamlit Secrets.")
     st.stop()
@@ -130,7 +132,7 @@ def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt
     
     return recommendations if recommendations else ["✅ No major issues detected"]
 
-# --- AUDIT FUNCTION (WITH WAVE) ---
+# --- AUDIT FUNCTION ---
 def run_audit(url, page_type, country, deploy_version=""):
     lh_val = 0.0
     err = 0
@@ -220,6 +222,86 @@ def run_audit(url, page_type, country, deploy_version=""):
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "Deploy_Version": str(deploy_version) if deploy_version else ""
     }
+
+# --- AI ANALYSIS FUNCTION ---
+def analyze_with_ai(df):
+    """Send audit data to Claude for intelligent analysis"""
+    
+    if not ANTHROPIC_API_KEY:
+        st.error("🤖 Claude API key not configured. Add ANTHROPIC_API_KEY to Streamlit Secrets.")
+        return None
+    
+    # Prepare data summary for Claude
+    summary = {
+        "total_pages": len(df),
+        "average_score": round(df['Score'].mean(), 1),
+        "countries": df['Country'].unique().tolist(),
+        "total_aria_issues": int(df['ARIA Issues'].sum()),
+        "total_alt_issues": int(df['Alt Text Issues'].sum()),
+        "total_contrast": int(df['Contrast Issues'].sum()),
+        "total_wave_errors": int(df['WAVE Errors'].sum()),
+        "worst_pages": df.nsmallest(3, 'Score')[['Country', 'Page Type', 'Score', 'ARIA Issues', 'WAVE Errors', 'Contrast Issues']].to_dict('records'),
+        "best_pages": df.nlargest(3, 'Score')[['Country', 'Page Type', 'Score']].to_dict('records'),
+        "by_country": df.groupby('Country').agg({
+            'Score': 'mean',
+            'ARIA Issues': 'sum',
+            'Alt Text Issues': 'sum',
+            'Contrast Issues': 'sum',
+            'WAVE Errors': 'sum'
+        }).round(1).to_dict('index')
+    }
+    
+    # Claude prompt
+    prompt = f"""You are an accessibility expert analyzing WCAG compliance audit results for Lyreco's e-commerce platforms across multiple countries.
+
+**Audit Data:**
+{json.dumps(summary, indent=2)}
+
+**Your task:**
+1. **Pattern Analysis**: Identify patterns across countries and page types. Are certain issues systemic?
+2. **Root Cause**: What's likely causing the most critical issues? (e.g., shared components, design system issues)
+3. **Priority Ranking**: Which fixes would have highest impact? Consider:
+   - Severity (ARIA > Alt Text > Contrast)
+   - Scope (affects multiple countries = higher priority)
+   - Business impact (Product/Category pages > Login)
+4. **Actionable Recommendations**: Give 3-5 specific, developer-ready actions
+
+**Format your response in clear sections with emojis. Be concise but specific.**
+"""
+    
+    # Call Claude API
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 2000,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ]
+        }
+        
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['content'][0]['text']
+        else:
+            st.error(f"Claude API error: {response.status_code} - {response.text[:200]}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error calling Claude API: {str(e)}")
+        return None
 
 # --- DASHBOARD FUNCTIONS ---
 def display_dashboard(df):
@@ -318,7 +400,27 @@ def display_dashboard(df):
         fig.update_layout(yaxis_range=[0, 100])
         st.plotly_chart(fig, use_container_width=True)
     
-    # Download
+    # AI Analysis
+    st.divider()
+    st.subheader("🤖 AI-Powered Insights")
+    
+    if st.button("✨ Analyze Results with AI (Claude)", type="secondary"):
+        with st.spinner("🤖 Claude is analyzing your accessibility data..."):
+            analysis = analyze_with_ai(df)
+            
+            if analysis:
+                st.markdown("### 📋 AI Analysis Report")
+                st.markdown(analysis)
+                
+                # Option to download analysis
+                st.download_button(
+                    label="📥 Download AI Analysis",
+                    data=analysis.encode('utf-8'),
+                    file_name=f"ai_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    mime="text/plain"
+                )
+    
+    # Download CSV
     st.divider()
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
@@ -359,9 +461,8 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
-    ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
+    ⚠️ *Automated tools catch ~40% of issues. Manual testing required for full compliance.*
     """)
-
 
 st.divider()
 
@@ -432,5 +533,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Version 6.3 - Full Integration | Powered by Lighthouse & WAVE")
-
+st.caption("Version 7.0 - AI-Powered Analysis | Lighthouse + WAVE + Claude")
