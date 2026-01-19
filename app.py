@@ -52,16 +52,14 @@ COUNTRIES = {
 
 SSO_LOGIN = "https://welcome.lyreco.com/lyreco-customers/login?scope=openid+lyreco.contacts.personalInfo%3Awrite%3Aself&client_id=2ddf9463-3e1e-462a-9f94-633e1e062ae8&response_type=code&state=4102a88f-fec5-46d1-b8d9-ea543ba0a385&redirect_uri=https%3A%2F%2Fshop.lyreco.fr%2Foidc-login-callback%2FaHR0cHMlM0ElMkYlMkZzaG9wLmx5cmVjby5mciUyRmZy&ui_locales=fr-FR&logo_uri=https%3A%2F%2Fshop.lyreco.fr"
 
-# --- HELPER FUNCTION ---
+# --- HELPER FUNCTIONS ---
 def safe_int(value):
-    """Convert to int, handle None"""
     try:
         return int(value) if value is not None else 0
     except:
         return 0
 
 def safe_float(value):
-    """Convert to float, handle None"""
     try:
         return float(value) if value is not None else 0.0
     except:
@@ -98,7 +96,6 @@ def get_color_emoji(score):
         return "🔴"
 
 def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt_issues):
-    # Safe conversion
     score = safe_float(score)
     lh_val = safe_float(lh_val)
     wave_err = safe_int(wave_err)
@@ -135,74 +132,65 @@ def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt
 
 # --- AUDIT FUNCTION ---
 def run_audit(url, page_type, country, deploy_version=""):
-    lh_val, err, con = 0, 0, 0
+    lh_val = 0.0
+    err = 0
+    con = 0
     aria_issues = 0
     alt_issues = 0
     failed_audits = []
     
+    # === LIGHTHOUSE ===
     try:
-        # Lighthouse
         url_enc = urllib.parse.quote(url)
         lh_api = f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url_enc}&category=accessibility&onlyCategories=accessibility&strategy=desktop&key={GOOGLE_KEY}"
         r_lh = requests.get(lh_api, timeout=45)
         
         if r_lh.status_code == 200:
             d = r_lh.json()
-            lh_val = d['lighthouseResult']['categories']['accessibility']['score'] * 100
-            audits = d['lighthouseResult']['audits']
             
+            # Score
+            score_value = d.get('lighthouseResult', {}).get('categories', {}).get('accessibility', {}).get('score')
+            if score_value is not None:
+                lh_val = float(score_value) * 100
+            
+            # Audits
+            audits = d.get('lighthouseResult', {}).get('audits', {})
             for audit_id, audit_data in audits.items():
-                if audit_data.get('score', 1) < 1:
+                score_val = audit_data.get('score', 1)
+                if score_val is not None and score_val < 1:
                     title = audit_data.get('title', 'Unknown')
                     failed_audits.append(title)
                     
                     if 'aria' in audit_id.lower():
                         aria_issues += 1
                     
-                    if 'image-alt' in audit_id or 'alt' in title.lower():
+                    if 'image-alt' in audit_id or 'alt' in str(title).lower():
                         alt_issues += 1
-        
-    # === WAVE ===
-    st.write(f"🔍 DEBUG: Testing WAVE for {country}-{page_type}")
-    try:
-        wave_api = f"https://wave.webaim.org/api/request?key={WAVE_KEY}&url={url}"
-        st.write(f"WAVE URL: {wave_api[:100]}...")  # Show first 100 chars
-        
-        r_w = requests.get(wave_api, timeout=35)
-        st.write(f"WAVE Status Code: {r_w.status_code}")
-        
-        if r_w.status_code == 200:
-            try:
-                dw = r_w.json()
-                st.write(f"WAVE Response Keys: {list(dw.keys())}")
-                
-                # Safe extraction
-                try:
-                    err_val = dw.get('categories', {}).get('error', {}).get('count')
-                    st.write(f"WAVE Errors extracted: {err_val}")
-                    if err_val is not None:
-                        err = int(err_val)
-                except Exception as e:
-                    st.write(f"Error extracting WAVE errors: {e}")
-                
-                try:
-                    con_val = dw.get('categories', {}).get('contrast', {}).get('count')
-                    st.write(f"WAVE Contrast extracted: {con_val}")
-                    if con_val is not None:
-                        con = int(con_val)
-                except Exception as e:
-                    st.write(f"Error extracting contrast: {e}")
-                    
-            except Exception as e:
-                st.error(f"WAVE JSON error: {e}")
-                st.write(f"WAVE Raw response (first 500 chars): {r_w.text[:500]}")
-        else:
-            st.error(f"WAVE API returned status {r_w.status_code}")
-            st.write(f"Response: {r_w.text[:500]}")
-            
+                        
     except Exception as e:
-        st.error(f"WAVE request exception: {e}")
-
+        st.warning(f"⚠️ Lighthouse error for {country}-{page_type}: {str(e)[:80]}")
+    
+    # === WAVE (Temporarily using Lighthouse score only) ===
+    # Note: WAVE integration to be added - using Lighthouse 100% for now
+    score = lh_val
+    
+    recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues)
+    
+    return {
+        "Country": str(country),
+        "Page Type": str(page_type),
+        "URL": str(url),
+        "Score": float(score),
+        "Lighthouse": float(lh_val),
+        "WAVE Errors": int(err),
+        "Contrast Issues": int(con),
+        "ARIA Issues": int(aria_issues),
+        "Alt Text Issues": int(alt_issues),
+        "Top Failed Audits": "; ".join(failed_audits[:3]) if failed_audits else "",
+        "Recommendations": " | ".join(recommendations) if recommendations else "No data",
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "Deploy_Version": str(deploy_version) if deploy_version else ""
+    }
 
 # --- DASHBOARD FUNCTIONS ---
 def display_dashboard(df):
@@ -320,16 +308,14 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     st.markdown("""
     ### Lyreco Accessibility Score (0-100)
     
-    Combines two industry-standard tools:
+    **Current version uses:**
     
-    **🔍 Google Lighthouse (50%)**
+    **🔍 Google Lighthouse (100%)**
     - Tests 40+ accessibility rules
     - Checks ARIA, semantic HTML, keyboard navigation
+    - Score directly from Lighthouse audit
     
-    **🌊 WAVE by WebAIM (50%)**
-    - Detects critical errors (missing alt text, broken forms)
-    - Identifies color contrast failures
-    - Penalties: 1.2 points per error, 0.5 per contrast issue
+    **Note:** WAVE integration (contrast & error detection) coming soon.
     
     **📈 Score Ranges:**
     - 🟢🟢 95-100: Excellent
@@ -338,7 +324,7 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
-    ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
+    ⚠️ *Automated tools catch ~40% of issues. Manual testing required for full compliance.*
     """)
 
 st.divider()
@@ -410,5 +396,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Version 6.1 - Stabilized Error Handling | Powered by Lighthouse & WAVE")
-
+st.caption("Version 6.2 - Lighthouse Only (WAVE integration pending) | Powered by Google Lighthouse")
