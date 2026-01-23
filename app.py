@@ -6,6 +6,11 @@ import urllib.parse
 import plotly.express as px
 from datetime import datetime
 import json
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+import time
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
@@ -13,7 +18,7 @@ st.set_page_config(page_title="Lyreco Accessibility Monitor", layout="wide")
 try:
     GOOGLE_KEY = st.secrets["GOOGLE_KEY"]
     WAVE_KEY = st.secrets["WAVE_KEY"]
-    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")  # Optional for AI
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", "")
 except:
     st.error("⚠️ API Keys missing! Add GOOGLE_KEY and WAVE_KEY to Streamlit Secrets.")
     st.stop()
@@ -23,10 +28,10 @@ COUNTRIES = {
     "France": {
         "home": "https://shop.lyreco.fr/fr",
         "category": "https://shop.lyreco.fr/fr/list/001001/papier-et-enveloppes/papier-blanc",
-        "product": "https://shop.lyreco.fr/fr/product/157.796/papier-blanc-a4-lyreco-multi-purpose-80-g-ramette-500-feuilles"  
+        "product": "https://shop.lyreco.fr/fr/product/157.796/papier-blanc-a4-lyreco-multi-purpose-80-g-ramette-500-feuilles"
     },
     "UK": {
-        "home": "https://shop.lyreco.co.uk/", 
+        "home": "https://shop.lyreco.co.uk/",
         "category": "https://shop.lyreco.co.uk/en/list/001001/paper-envelopes/white-office-paper",
         "product": "https://shop.lyreco.co.uk/en/product/159.543/lyreco-white-a4-80gsm-copier-paper-box-of-5-reams-5x500-sheets-of-paper"
     },
@@ -67,22 +72,161 @@ def safe_float(value):
     except:
         return 0.0
 
-# --- SCORING FUNCTIONS ---
-def calculate_lyreco_score(lh_pct, w_err, w_con):
+# --- AXE-CORE TEST ---
+@st.cache_data(ttl=600, show_spinner=False)
+def run_axe_test(url):
+    """Run axe-core accessibility test using Selenium"""
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.get(url)
+        time.sleep(2)
+        
+        # Inject axe-core
+        driver.execute_script("""
+            var script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.7.2/axe.min.js';
+            document.head.appendChild(script);
+        """)
+        time.sleep(2)
+        
+        # Run axe
+        results = driver.execute_script("return axe.run();")
+        driver.quit()
+        
+        violations = results.get('violations', [])
+        passes = results.get('passes', [])
+        
+        # Count by impact
+        critical = sum(1 for v in violations if v.get('impact') == 'critical')
+        serious = sum(1 for v in violations if v.get('impact') == 'serious')
+        moderate = sum(1 for v in violations if v.get('impact') == 'moderate')
+        minor = sum(1 for v in violations if v.get('impact') == 'minor')
+        
+        return {
+            'total_violations': len(violations),
+            'critical': critical,
+            'serious': serious,
+            'moderate': moderate,
+            'minor': minor,
+            'passes': len(passes),
+            'violations_details': violations[:5]  # Top 5 for details
+        }
+    except Exception as e:
+        st.warning(f"⚠️ Axe-core test failed: {str(e)[:100]}")
+        return {
+            'total_violations': 0,
+            'critical': 0,
+            'serious': 0,
+            'moderate': 0,
+            'minor': 0,
+            'passes': 0,
+            'violations_details': []
+        }
+
+# --- KEYBOARD NAVIGATION TEST ---
+@st.cache_data(ttl=600, show_spinner=False)
+def run_keyboard_test(url):
+    """Simulate keyboard-only navigation (30 tabs)"""
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument('--headless')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.get(url)
+        time.sleep(2)
+        
+        body = driver.find_element(By.TAG_NAME, "body")
+        focus_journey = []
+        issues = []
+        
+        for i in range(30):
+            body.send_keys(Keys.TAB)
+            time.sleep(0.1)
+            
+            try:
+                focused = driver.switch_to.active_element
+                tag = focused.tag_name
+                is_visible = focused.is_displayed()
+                element_id = focused.get_attribute('id') or 'none'
+                
+                focus_journey.append({
+                    'step': i+1,
+                    'tag': tag,
+                    'visible': is_visible,
+                    'id': element_id
+                })
+                
+                if not is_visible:
+                    issues.append(f"Tab #{i+1}: Invisible focusable element")
+            except:
+                pass
+        
+        driver.quit()
+        
+        # Detect keyboard trap (focus stuck on same element)
+        trapped = False
+        if len(focus_journey) > 10:
+            last_10 = focus_journey[-10:]
+            unique_ids = set(f['id'] for f in last_10)
+            if len(unique_ids) == 1 and list(unique_ids)[0] != 'none':
+                trapped = True
+        
+        visible_count = sum(1 for f in focus_journey if f['visible'])
+        
+        return {
+            'total_tabs': len(focus_journey),
+            'visible_elements': visible_count,
+            'invisible_elements': len(focus_journey) - visible_count,
+            'keyboard_trap_detected': trapped,
+            'issues': issues
+        }
+    except Exception as e:
+        st.warning(f"⚠️ Keyboard test failed: {str(e)[:100]}")
+        return {
+            'total_tabs': 0,
+            'visible_elements': 0,
+            'invisible_elements': 0,
+            'keyboard_trap_detected': False,
+            'issues': []
+        }
+
+# --- NEW SCORING WITH AXE-CORE ---
+def calculate_lyreco_score(lh_pct, w_err, w_con, axe_critical, axe_serious):
+    """
+    New scoring: Lighthouse 40% + WAVE 30% + Axe-core 30%
+    Heavy penalties for critical/serious violations
+    """
     lh_pct = safe_float(lh_pct)
     w_err = safe_int(w_err)
     w_con = safe_int(w_con)
+    axe_critical = safe_int(axe_critical)
+    axe_serious = safe_int(axe_serious)
     
+    # Lighthouse component (40%)
+    lh_score = lh_pct * 0.4
+    
+    # WAVE component (30%)
     err_penalty = w_err * 1.2
     con_penalty = w_con * 0.5
     wave_base = max(0, 100 - err_penalty - con_penalty)
+    wave_score = wave_base * 0.3
     
-    if lh_pct > 0:
-        final_score = (lh_pct * 0.5) + (wave_base * 0.5)
-    else:
-        final_score = wave_base
+    # Axe-core component (30%)
+    # Heavy penalties: critical = 10 points, serious = 5 points
+    axe_penalty = (axe_critical * 10) + (axe_serious * 5)
+    axe_base = max(0, 100 - axe_penalty)
+    axe_score = axe_base * 0.3
     
-    return round(max(0, final_score), 1)
+    final_score = lh_score + wave_score + axe_score
+    return round(max(0, min(100, final_score)), 1)
 
 def get_color_emoji(score):
     score = safe_float(score)
@@ -97,15 +241,16 @@ def get_color_emoji(score):
     else:
         return "🔴"
 
-def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt_issues):
+def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt_issues, axe_critical, axe_serious):
     score = safe_float(score)
-    lh_val = safe_float(lh_val)
-    wave_err = safe_int(wave_err)
-    contrast = safe_int(contrast)
-    aria_issues = safe_int(aria_issues)
-    alt_issues = safe_int(alt_issues)
-    
     recommendations = []
+    
+    # Axe-core critical issues (highest priority)
+    if axe_critical > 0:
+        recommendations.append(f"🔴 CRITICAL: Fix {axe_critical} critical accessibility violations (axe-core)")
+    
+    if axe_serious > 0:
+        recommendations.append(f"🟠 HIGH: Resolve {axe_serious} serious violations (axe-core)")
     
     if aria_issues > 0:
         recommendations.append(f"🔴 CRITICAL: Fix {aria_issues} ARIA issues (screen readers)")
@@ -132,14 +277,18 @@ def generate_recommendations(score, lh_val, wave_err, contrast, aria_issues, alt
     
     return recommendations if recommendations else ["✅ No major issues detected"]
 
-# --- AUDIT FUNCTION ---
-def run_audit(url, page_type, country, deploy_version=""):
+# --- MAIN AUDIT FUNCTION ---
+def run_audit(url, page_type, country, deploy_version="", run_axe=True):
     lh_val = 0.0
     err = 0
     con = 0
     aria_issues = 0
     alt_issues = 0
     failed_audits = []
+    
+    axe_critical = 0
+    axe_serious = 0
+    axe_total = 0
     
     # === LIGHTHOUSE ===
     try:
@@ -149,28 +298,22 @@ def run_audit(url, page_type, country, deploy_version=""):
         
         if r_lh.status_code == 200:
             d = r_lh.json()
-            
-            # Score
             score_value = d.get('lighthouseResult', {}).get('categories', {}).get('accessibility', {}).get('score')
             if score_value is not None:
                 lh_val = float(score_value) * 100
             
-            # Audits
             audits = d.get('lighthouseResult', {}).get('audits', {})
             for audit_id, audit_data in audits.items():
                 score_val = audit_data.get('score', 1)
                 if score_val is not None and score_val < 1:
                     title = audit_data.get('title', 'Unknown')
                     failed_audits.append(title)
-                    
                     if 'aria' in audit_id.lower():
                         aria_issues += 1
-                    
                     if 'image-alt' in audit_id or 'alt' in str(title).lower():
                         alt_issues += 1
-                        
     except Exception as e:
-        st.warning(f"⚠️ Lighthouse error for {country}-{page_type}: {str(e)[:80]}")
+        st.warning(f"⚠️ Lighthouse error: {str(e)[:80]}")
     
     # === WAVE ===
     try:
@@ -178,34 +321,25 @@ def run_audit(url, page_type, country, deploy_version=""):
         r_w = requests.get(wave_api, timeout=35)
         
         if r_w.status_code == 200:
-            try:
-                dw = r_w.json()
-                
-                # Safe extraction of errors
-                if 'categories' in dw:
-                    if 'error' in dw['categories']:
-                        err_val = dw['categories']['error'].get('count')
-                        if err_val is not None:
-                            err = int(err_val)
-                    
-                    # Safe extraction of contrast
-                    if 'contrast' in dw['categories']:
-                        con_val = dw['categories']['contrast'].get('count')
-                        if con_val is not None:
-                            con = int(con_val)
-                            
-            except Exception as e:
-                st.warning(f"⚠️ WAVE parsing error for {country}-{page_type}: {str(e)[:80]}")
-        else:
-            st.warning(f"⚠️ WAVE API returned status {r_w.status_code} for {country}-{page_type}")
-            
+            dw = r_w.json()
+            if 'categories' in dw:
+                if 'error' in dw['categories']:
+                    err = safe_int(dw['categories']['error'].get('count'))
+                if 'contrast' in dw['categories']:
+                    con = safe_int(dw['categories']['contrast'].get('count'))
     except Exception as e:
-        st.warning(f"⚠️ WAVE request error for {country}-{page_type}: {str(e)[:80]}")
+        st.warning(f"⚠️ WAVE error: {str(e)[:80]}")
     
-    # === CALCULATE SCORE (50/50) ===
-    score = calculate_lyreco_score(lh_val, err, con)
+    # === AXE-CORE ===
+    if run_axe:
+        axe_results = run_axe_test(url)
+        axe_critical = axe_results['critical']
+        axe_serious = axe_results['serious']
+        axe_total = axe_results['total_violations']
     
-    recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues)
+    # === CALCULATE SCORE (40% LH + 30% WAVE + 30% Axe) ===
+    score = calculate_lyreco_score(lh_val, err, con, axe_critical, axe_serious)
+    recommendations = generate_recommendations(score, lh_val, err, con, aria_issues, alt_issues, axe_critical, axe_serious)
     
     return {
         "Country": str(country),
@@ -217,103 +351,29 @@ def run_audit(url, page_type, country, deploy_version=""):
         "Contrast Issues": int(con),
         "ARIA Issues": int(aria_issues),
         "Alt Text Issues": int(alt_issues),
+        "Axe Critical": int(axe_critical),
+        "Axe Serious": int(axe_serious),
+        "Axe Total Violations": int(axe_total),
         "Top Failed Audits": "; ".join(failed_audits[:3]) if failed_audits else "",
-        "Recommendations": " | ".join(recommendations) if recommendations else "No data",
+        "Recommendations": " | ".join(recommendations),
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "Deploy_Version": str(deploy_version) if deploy_version else ""
     }
 
-# --- AI ANALYSIS FUNCTION ---
-def analyze_with_ai(df):
-    """Send audit data to Claude for intelligent analysis"""
-    
-    if not ANTHROPIC_API_KEY:
-        st.error("🤖 Claude API key not configured. Add ANTHROPIC_API_KEY to Streamlit Secrets.")
-        return None
-    
-    # Prepare data summary for Claude
-    summary = {
-        "total_pages": len(df),
-        "average_score": round(df['Score'].mean(), 1),
-        "countries": df['Country'].unique().tolist(),
-        "total_aria_issues": int(df['ARIA Issues'].sum()),
-        "total_alt_issues": int(df['Alt Text Issues'].sum()),
-        "total_contrast": int(df['Contrast Issues'].sum()),
-        "total_wave_errors": int(df['WAVE Errors'].sum()),
-        "worst_pages": df.nsmallest(3, 'Score')[['Country', 'Page Type', 'Score', 'ARIA Issues', 'WAVE Errors', 'Contrast Issues']].to_dict('records'),
-        "best_pages": df.nlargest(3, 'Score')[['Country', 'Page Type', 'Score']].to_dict('records'),
-        "by_country": df.groupby('Country').agg({
-            'Score': 'mean',
-            'ARIA Issues': 'sum',
-            'Alt Text Issues': 'sum',
-            'Contrast Issues': 'sum',
-            'WAVE Errors': 'sum'
-        }).round(1).to_dict('index')
-    }
-    
-    # Claude prompt
-    prompt = f"""You are an accessibility expert analyzing WCAG compliance audit results for Lyreco's e-commerce platforms across multiple countries.
-
-**Audit Data:**
-{json.dumps(summary, indent=2)}
-
-**Your task:**
-1. **Pattern Analysis**: Identify patterns across countries and page types. Are certain issues systemic?
-2. **Root Cause**: What's likely causing the most critical issues? (e.g., shared components, design system issues)
-3. **Priority Ranking**: Which fixes would have highest impact? Consider:
-   - Severity (ARIA > Alt Text > Contrast)
-   - Scope (affects multiple countries = higher priority)
-   - Business impact (Product/Category pages > Login)
-4. **Actionable Recommendations**: Give 3-5 specific, developer-ready actions
-
-**Format your response in clear sections with emojis. Be concise but specific.**
-"""
-    
-    # Call Claude API
-    try:
-        headers = {
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        }
-        
-        data = {
-            "model": "claude-3-haiku-20240307",  # Fast & cheap
-            "max_tokens": 2000,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-        
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=data,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result['content'][0]['text']
-        else:
-            st.error(f"Claude API error: {response.status_code} - {response.text[:200]}")
-            return None
-            
-    except Exception as e:
-        st.error(f"Error calling Claude API: {str(e)}")
-        return None
-
-# --- DASHBOARD FUNCTIONS ---
+# --- DASHBOARD ---
 def display_dashboard(df):
     # Metrics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
     with col1:
         st.metric("Average Score", f"{df['Score'].mean():.1f}")
     with col2:
-        st.metric("ARIA Issues", int(df['ARIA Issues'].sum()))
+        st.metric("Axe Critical", int(df['Axe Critical'].sum()))
     with col3:
-        st.metric("Alt Text Issues", int(df['Alt Text Issues'].sum()))
+        st.metric("Axe Serious", int(df['Axe Serious'].sum()))
     with col4:
+        st.metric("ARIA Issues", int(df['ARIA Issues'].sum()))
+    with col5:
         st.metric("Contrast Issues", int(df['Contrast Issues'].sum()))
     
     st.divider()
@@ -352,9 +412,8 @@ def display_dashboard(df):
     )
     
     filtered_df = df[df['Country'].isin(country_filter)]
-    
-    display_cols = ['Country', 'Page Type', 'Score', 'Lighthouse', 'WAVE Errors', 
-                    'Contrast Issues', 'ARIA Issues', 'Alt Text Issues']
+    display_cols = ['Country', 'Page Type', 'Score', 'Lighthouse', 'WAVE Errors',
+                    'Axe Critical', 'Axe Serious', 'Contrast Issues', 'ARIA Issues']
     st.dataframe(filtered_df[display_cols], use_container_width=True)
     
     st.divider()
@@ -363,22 +422,16 @@ def display_dashboard(df):
     st.subheader("🎯 Priority Actions")
     
     critical = df[df['Score'] < 80].sort_values('Score')
-    
     if len(critical) > 0:
         for idx, row in critical.iterrows():
             with st.expander(f"⚠️ {row['Country']} - {row['Page Type']} (Score: {row['Score']:.1f})"):
                 st.markdown(f"**URL:** {row['URL']}")
-                st.markdown(f"**Lighthouse:** {row['Lighthouse']:.1f} | **WAVE Errors:** {safe_int(row['WAVE Errors'])} | **Contrast:** {safe_int(row['Contrast Issues'])}")
-                
+                st.markdown(f"**Lighthouse:** {row['Lighthouse']:.1f} | **WAVE Errors:** {safe_int(row['WAVE Errors'])} | **Axe Critical:** {safe_int(row['Axe Critical'])} | **Axe Serious:** {safe_int(row['Axe Serious'])}")
                 st.markdown("**Recommendations:**")
                 recs = str(row['Recommendations']).split(' | ')
                 for i, rec in enumerate(recs, 1):
                     if rec and rec != 'nan':
                         st.markdown(f"{i}. {rec}")
-                
-                if pd.notna(row.get('Top Failed Audits')) and row['Top Failed Audits']:
-                    st.markdown("**Failed Audits:**")
-                    st.caption(row['Top Failed Audits'])
     else:
         st.success("✅ No critical issues! All pages score 80+")
     
@@ -386,7 +439,6 @@ def display_dashboard(df):
     
     # Chart
     st.subheader("📊 Score Distribution by Country")
-    
     chart_df = df[df['Country'] != 'Global'].copy()
     if len(chart_df) > 0:
         fig = px.bar(
@@ -400,26 +452,6 @@ def display_dashboard(df):
         fig.update_layout(yaxis_range=[0, 100])
         st.plotly_chart(fig, use_container_width=True)
     
-    # AI Analysis
-    st.divider()
-    st.subheader("🤖 AI-Powered Insights")
-    
-    if st.button("✨ Analyze Results with AI (Claude)", type="secondary"):
-        with st.spinner("🤖 Claude is analyzing your accessibility data..."):
-            analysis = analyze_with_ai(df)
-            
-            if analysis:
-                st.markdown("### 📋 AI Analysis Report")
-                st.markdown(analysis)
-                
-                # Option to download analysis
-                st.download_button(
-                    label="📥 Download AI Analysis",
-                    data=analysis.encode('utf-8'),
-                    file_name=f"ai_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    mime="text/plain"
-                )
-    
     # Download CSV
     st.divider()
     csv = df.to_csv(index=False).encode('utf-8')
@@ -427,61 +459,108 @@ def display_dashboard(df):
         label="📥 Download Full Report (CSV)",
         data=csv,
         file_name=f"lyreco_audit_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv",
+        mime="text/csv"
     )
 
-# --- MAIN UI ---
-# Sidebar with branding
-with st.sidebar:
-    # Load logo from Lyreco CDN
-    st.image("https://cdn-s1.lyreco.com/staticswebshop/pictures/looknfeel/FRFR/logo.svg", width=200)
+# --- KEYBOARD TEST TAB ---
+def display_keyboard_tests(df):
+    st.subheader("⌨️ Keyboard Navigation Tests")
+    st.caption("Simulates a blind user navigating with TAB key (30 presses)")
     
+    country = st.selectbox("Select Country", options=df['Country'].unique().tolist())
+    page_type = st.selectbox("Select Page Type", options=['Home', 'Category', 'Product'])
+    
+    if st.button("🚀 Run Keyboard Test", type="primary"):
+        # Get URL
+        if country == "Global":
+            url = SSO_LOGIN
+        else:
+            url = COUNTRIES[country].get(page_type.lower(), "")
+        
+        if url:
+            with st.spinner(f"⌨️ Testing keyboard navigation on {country} {page_type}..."):
+                results = run_keyboard_test(url)
+            
+            st.divider()
+            
+            # Metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Tabs", results['total_tabs'])
+            with col2:
+                st.metric("Visible Elements", results['visible_elements'])
+            with col3:
+                st.metric("Invisible Elements", results['invisible_elements'])
+            with col4:
+                trap_status = "🚫 YES" if results['keyboard_trap_detected'] else "✅ NO"
+                st.metric("Keyboard Trap", trap_status)
+            
+            st.divider()
+            
+            # Issues
+            if results['issues']:
+                st.error(f"⚠️ Found {len(results['issues'])} issues:")
+                for issue in results['issues'][:10]:
+                    st.markdown(f"- {issue}")
+            else:
+                st.success("✅ No keyboard navigation issues detected!")
+            
+            # Trap warning
+            if results['keyboard_trap_detected']:
+                st.error("🚫 **CRITICAL: Keyboard Trap Detected!**")
+                st.markdown("""
+                A keyboard trap prevents users from navigating past a certain element. 
+                This is a **WCAG 2.1.2 Level A** failure and blocks blind users completely.
+                """)
+        else:
+            st.error("URL not found")
+
+# --- MAIN UI ---
+with st.sidebar:
+    st.image("https://cdn-s1.lyreco.com/staticswebshop/pictures/looknfeel/FRFR/logo.svg", width=200)
     st.divider()
     st.markdown("### 📊 About This Tool")
     st.markdown("""
     Automated WCAG compliance monitoring for Lyreco e-commerce platforms.
     
     **Powered by:**
-    - Google Lighthouse
-    - WAVE by WebAIM  
-    - Axe.dev
+    - Google Lighthouse (40%)
+    - WAVE by WebAIM (30%)
+    - Axe-core (30%)
+    - Keyboard Navigation Test
     
     **Coverage:**
     - 6 countries
     - 4 page types per country
-    - 50+ accessibility checks
+    - 100+ accessibility checks
     """)
-    
     st.divider()
-    st.caption("Version 7.0 | January 2026")
+    st.caption("Version 8.0 | January 2026")
 
 # Main title
 st.title("Lyreco Accessibility Monitor")
-st.caption("Multi-country WCAG compliance tracking")
-
-# Main title
-st.title("Lyreco Accessibility Monitor")
-st.caption("Multi-country WCAG compliance tracking")
+st.caption("Multi-country WCAG compliance tracking with Axe-core")
 
 # Explanation
 with st.expander("📊 How We Calculate Accessibility Score"):
     st.markdown("""
     ### Lyreco Accessibility Score (0-100)
     
-    Combines two industry-standard tools:
+    **New Formula (v8.0):**
     
-    **🔍 Google Lighthouse (50%)**
+    **🔍 Google Lighthouse (40%)**
     - Tests 40+ accessibility rules
     - Checks ARIA, semantic HTML, keyboard navigation
     
-    **🌊 WAVE by WebAIM (50%)**
+    **🌊 WAVE by WebAIM (30%)**
     - Detects critical errors (missing alt text, broken forms)
-    - Identifies color contrast failures
+    - Color contrast failures
     - Penalties: 1.2 points per error, 0.5 per contrast issue
     
-    **Formula:**
-    - WAVE base = 100 - (errors × 1.2) - (contrast × 0.5)
-    - Final = (Lighthouse × 0.5) + (WAVE × 0.5)
+    **⚡ Axe-core (30%)**
+    - Deep WCAG 2.1 compliance testing
+    - Heavy penalties: Critical violation = -10 points, Serious = -5 points
+    - Industry-standard tool used by Microsoft, Google, Adobe
     
     **📈 Score Ranges:**
     - 🟢🟢 95-100: Excellent
@@ -490,13 +569,18 @@ with st.expander("📊 How We Calculate Accessibility Score"):
     - 🟡 60-80: Needs improvement
     - 🔴 <60: Critical issues
     
+    **⌨️ Keyboard Navigation Test (Separate):**
+    - Simulates blind user with keyboard only
+    - Detects keyboard traps (WCAG 2.1.2 failure)
+    - Not included in score - binary pass/fail
+    
     ⚠️ *Automated tools catch ~70% of issues. Manual testing required for full compliance.*
     """)
 
 st.divider()
 
-# Mode Selection
-tab1, tab2 = st.tabs(["🚀 Run New Audit", "📂 Upload Previous Results"])
+# Tabs
+tab1, tab2, tab3 = st.tabs(["🚀 Run New Audit", "⌨️ Keyboard Tests", "📂 Upload Previous Results"])
 
 with tab1:
     st.subheader("Run Multi-Country Audit")
@@ -509,13 +593,14 @@ with tab1:
         default=list(COUNTRIES.keys())
     )
     
+    run_axe_tests = st.checkbox("Include Axe-core tests (slower but more accurate)", value=True)
+    
     if st.button("🚀 Start Audit", type="primary"):
         if not country_selection:
             st.warning("Please select at least one country")
         else:
             results = []
             
-            # Progress
             total_audits = 1 + (len(country_selection) * 3)
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -523,7 +608,7 @@ with tab1:
             
             # SSO Login
             status_text.text("🔍 Auditing Global SSO Login...")
-            results.append(run_audit(SSO_LOGIN, "Login (SSO)", "Global", deploy_version))
+            results.append(run_audit(SSO_LOGIN, "Login (SSO)", "Global", deploy_version, run_axe_tests))
             current += 1
             progress_bar.progress(current / total_audits)
             
@@ -532,7 +617,7 @@ with tab1:
                 pages = COUNTRIES[country]
                 for page_type, url in pages.items():
                     status_text.text(f"🔍 Auditing {country} - {page_type.title()}...")
-                    results.append(run_audit(url, page_type.title(), country, deploy_version))
+                    results.append(run_audit(url, page_type.title(), country, deploy_version, run_axe_tests))
                     current += 1
                     progress_bar.progress(current / total_audits)
             
@@ -542,11 +627,18 @@ with tab1:
             # Display results
             df = pd.DataFrame(results)
             st.success(f"✅ Audit complete! Tested {len(results)} pages")
-            
             st.divider()
             display_dashboard(df)
 
 with tab2:
+    st.info("ℹ️ First run an audit in Tab 1, then come back here to test keyboard navigation")
+    # Placeholder - will work after first audit
+    if 'df' in locals():
+        display_keyboard_tests(df)
+    else:
+        st.warning("Run an audit first to enable keyboard tests")
+
+with tab3:
     st.subheader("Upload Previous Audit Results")
     
     uploaded_file = st.file_uploader("Upload CSV from previous audit", type="csv")
@@ -554,17 +646,11 @@ with tab2:
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         st.success(f"✅ Loaded {len(df)} audit results")
-        
         st.divider()
         display_dashboard(df)
     else:
-        st.info("👆 Upload a CSV file to view historical results and compare over time")
+        st.info("👆 Upload a CSV file to view historical results")
 
 # Footer
 st.divider()
-st.caption("Version 7.0 - AI-Powered Analysis | Lighthouse + WAVE + Claude")
-
-
-
-
-
+st.caption("Version 8.0 - Lighthouse + WAVE + Axe-core + Keyboard Navigation")
